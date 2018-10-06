@@ -1,1 +1,1 @@
-package.path = debug.getinfo(1, "S").source:match[[^@?(.*[\/])[^\/]-$]] .."util/?.lua;".. package.path
+package.path = debug.getinfo(1, "S").source:match[[^@?(.*[\/])[^\/]-$]] .. "utils/?.lua;" .. package.path
