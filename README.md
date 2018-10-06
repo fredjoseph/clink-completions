@@ -9,5 +9,5 @@ Copy all files to the profile folder in your clink installation
 Copy all files in `%CMDER_ROOT%/config` folder.
 
 ## Links
-[Offical clink-completions](https://github.com/vladimir-kotikov/clink-completions)
+[Official clink-completions](https://github.com/vladimir-kotikov/clink-completions)
 
