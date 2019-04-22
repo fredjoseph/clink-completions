@@ -1,147 +1,319 @@
-local scoop_dir = os.getenv('SCOOP')
-if not scoop_dir then
-	scoop_dir = os.getenv('USERPROFILE')..'/scoop'
-end
-local scoop_global = os.getenv('SCOOP_GLOBAL')
+-- -*- coding: utf-8 -*-
+-- preamble: common routines
 
+local JSON = require("JSON")
 
-local function trim_extensions (apps)
-	for k, v in pairs(apps) do
-		apps[k] = string.match(v, '[%w-]*')
-	end
-	return apps
-end
-
-local function find_dirs (path)
-	dirs = clink.find_dirs(path)
-	-- Remove .. and . from table of directories
-	table.remove(dirs, 1)
-	table.remove(dirs, 1)
-	return dirs
-end
-
-local function find_files (path)
-	files = clink.find_files(path)
-	-- Remove .. and . from table of files
-	table.remove(files, 1)
-	table.remove(files, 1)
-	return files
-end
-
-local function get_cache ()
-	cache = find_files(scoop_dir..'/cache/*')
-	for i, name in pairs(cache) do
-		signPos = string.find(name, "#")
-		cache[i] = signPos and string.sub(name, 0, signPos - 1) or nil
-	end
-	return cache
-end
-
-local Buckets = {}
-
-function Buckets.get_local ()
-	return find_dirs(scoop_dir..'/buckets/*')
-end
-
-function Buckets.get_known ()
-	json = io.open(scoop_dir..'/apps/scoop/current/buckets.json')
-	known = {}
-	for line in json:lines() do
-		bucket = string.match(line, '\"(.-)\"')
-		if bucket then
-			table.insert(known, bucket)
-		end
-	end
-	return known
-end
-
-local Apps = {}
-
-function Apps.get_installed ()
-	installed = find_dirs(scoop_dir..'/apps/*')
-	if scoop_global then
-		for _, dir in pairs(find_dirs(scoop_global..'/apps/*')) do
-			table.insert(installed, dir)
-		end
-	end
-	return installed
-end
-
-function Apps.get_known ()
-	apps = trim_extensions(clink.find_files(scoop_dir..'/apps/scoop/current/bucket/*.json'))
-	for _, dir in pairs(Buckets.get_local()) do
-		for u, app in pairs(trim_extensions(clink.find_files(scoop_dir..'/buckets/'..dir..'/*.json'))) do
-			table.insert(apps, app)
-		end
-		for u, app in pairs(trim_extensions(clink.find_files(scoop_dir..'/buckets/'..dir..'/bucket/*.json'))) do
-			table.insert(apps, app)
-		end
-	end
-	return apps
-end
+local matchers = require("matchers")
+local path = require("path")
+local w = require("tables").wrap
+local concat = require("funclib").concat
 
 local parser = clink.arg.new_parser
 
-local boolean_parser = parser({'true', 'false'})
+local function scoop_folder()
+    local folder = os.getenv("SCOOP")
+
+    if not folder then
+        folder = os.getenv("home") .. "\\scoop"
+    end
+
+    return folder
+end
+
+local function scoop_global_folder()
+    local folder = os.getenv("SCOOP_GLOBAL")
+
+    if not folder then
+        folder = os.getenv("ProgramData") .. "\\scoop"
+    end
+
+    return folder
+end
+
+local function scoop_load_config() -- luacheck: no unused args
+    local file = io.open(os.getenv("home") .. "\\.scoop")
+    -- If there is no such file, then close handle and return
+    if file == nil then
+        return w()
+    end
+
+    -- Read the whole file contents
+    local contents = file:read("*a")
+    file:close()
+
+    -- strip UTF-8-BOM
+    local utf8_len = contents:len()
+    local path_start = string.find(contents, "{")
+    contents = contents:sub(path_start, utf8_len)
+
+    local data = JSON:decode(contents)
+
+    if data == nil then
+        return w()
+    end
+
+    return data
+end
+
+local function scoop_alias_list(token) -- luacheck: no unused args
+    local data = scoop_load_config()
+
+    return w(data.alias):keys()
+end
+
+local function scoop_config_list(token) -- luacheck: no unused args
+    local data = scoop_load_config()
+
+    return w(data):keys()
+end
+
+local function scoop_bucket_known_list(token) -- luacheck: no unused args
+    local file = io.open(scoop_folder() .. "\\apps\\scoop\\current\\buckets.json")
+    -- If there is no such file, then close handle and return
+    if file == nil then
+        return w()
+    end
+
+    -- Read the whole file contents
+    local contents = file:read("*a")
+    file:close()
+
+    local data = JSON:decode(contents)
+
+    return w(data):keys()
+end
+
+local function scoop_bucket_list(token)
+    local finder = matchers.create_files_matcher(scoop_folder() .. "\\buckets\\*")
+
+    local list = finder(token)
+
+    return list:filter(path.is_real_dir)
+end
+
+local function scoop_apps_list(token)
+    local folders = {scoop_folder(), scoop_global_folder()}
+
+    local list = w()
+    for _, folder in pairs(folders) do
+        local finder = matchers.create_files_matcher(folder .. "\\apps\\*")
+
+        local new_list = finder(token)
+        list = w(concat(list, new_list))
+    end
+
+    return list:filter(path.is_real_dir)
+end
+
+local function scoop_available_apps_list(token)
+    -- search in default bucket
+    local finder = matchers.create_files_matcher(scoop_folder() .. "\\apps\\scoop\\current\\bucket\\*.json")
+    local list = finder(token)
+
+    -- search in each installed bucket
+    local buckets = scoop_bucket_list("")
+    for _, bucket in pairs(buckets) do
+        local bucket_folder = scoop_folder() .. "\\buckets\\" .. bucket
+
+        -- check the bucket folder exists
+        if clink.is_dir(bucket_folder .. "\\bucket") then
+            bucket_folder = bucket_folder .. "\\bucket"
+        end
+
+        local b_finder = matchers.create_files_matcher(bucket_folder .. "\\*.json")
+        local b_list = b_finder(token)
+        list = w(concat(list, b_list))
+    end
+
+    -- remove ".json" of file name
+    for k, v in pairs(list) do
+        list[k] = v:gsub(".json", "")
+    end
+
+    return list
+end
+
+local function scoop_cache_apps_list(token)
+    local cache_folder = os.getenv("SCOOP_CACHE")
+    if not cache_folder then
+        cache_folder = scoop_folder() .. "\\cache"
+    end
+
+    local finder = matchers.create_files_matcher(cache_folder .. "\\*")
+
+    local list = finder(token)
+    list = w(list:filter(path.is_real_dir))
+
+    -- get name before "#" from cache list (name#version#url)
+    for k, v in pairs(list) do
+        list[k] = v:gsub("#.*$", "")
+    end
+
+    return list
+end
+
+local scoop_default_flags = {
+    "-h", "--help"
+}
+
+local scoop_alias_parser =
+    parser(
+    {
+        "add",
+        "list" .. parser("-v", "--verbose"),
+        "rm" .. parser({scoop_alias_list})
+    }
+)
+
+local scoop_bucket_parser =
+    parser(
+    {
+        "add" .. parser({scoop_bucket_known_list}),
+        "list",
+        "known",
+        "rm" .. parser({scoop_bucket_list})
+    }
+)
+
+local scoop_cache_parser =
+    parser(
+    {
+        "show" .. parser({scoop_cache_apps_list, scoop_apps_list, "*"}),
+        "rm" .. parser({scoop_cache_apps_list, "*"})
+    }
+)
+
+local scoop_cleanup_parser =
+    parser(
+    {
+        scoop_apps_list,
+        "*"
+    },
+	"-g", "--global",
+    "-k", "--cache"
+):loop(1)
+
+local scoop_config_parser =
+    parser(
+    {
+        "rm" .. parser({scoop_config_list}),
+        scoop_config_list,
+        "aria2-enabled" .. parser({"true", "false"}),
+        "aria2-max-connection-per-server",
+        "aria2-min-split-size",
+        "aria2-options",
+        "aria2-retry-wait",
+        "aria2-split",
+        "debug" .. parser({"true", "false"}),
+        "proxy",
+        "show_update_log" .. parser({"true", "false"}),
+        "virustotal_api_key"
+    }
+)
+
+local scoop_uninstall_parser =
+    parser(
+    {
+        scoop_apps_list
+    },
+    "-g", "--global",
+    "-p", "--purge"
+):loop(1)
+
+local scoop_update_parser =
+    parser(
+    {
+        scoop_apps_list,
+        "*"
+    },
+    "-f", "--force",
+    "-g", "--global",
+    "-i", "--independent",
+    "-k", "--no-cache",
+    "-s", "--skip",
+    "-q", "--quiet"
+):loop(1)
+
 local architecture_parser = parser({'32bit', '64bit'})
 
-local config_parser = parser({
-	'MSIEXTRACT_USE_LESSMSI' ..boolean_parser,
-	'aria2-enabled' ..boolean_parser,
-	'aria2-retry-wait',
-	'aria2-split',
-	'aria2-max-connection-per-server',
-	'aria2-min-split-size',
-	'aria2-options',
-	'NO_JUNCTIONS' ..boolean_parser,
-	'show_update_log' ..boolean_parser,
-	'virustotal_api_key',
-	'proxy'
-})
+local scoop_install_parser =
+    parser(
+    {scoop_available_apps_list},
+    "-g", "--global",
+    "-i", "--independent",
+    "-k", "--no-cache",
+    "-s", "--skip",
+    "-a" .. architecture_parser, "--arch" .. architecture_parser
+):loop(1)
 
-local scoop_parser = parser({
-	{'info', 'depends', 'home'} ..parser({Apps.get_known}),
-	'alias' ..parser({'add', 'list' ..parser({'-v', '--verbose'}), 'rm'}),
-	'bucket' ..parser({'add' ..parser({Buckets.get_known}), 'list', 'known', 'rm' ..parser({Buckets.get_local})}),
-	'cache' ..parser({'show', 'rm'} ..parser({get_cache})),
-	'checkup',
-	'cleanup' ..parser({Apps.get_installed},
-		'-g', '--global'):loop(1),
-	'config' ..config_parser,
-	'create',
-	'export',
-	'list',
-	'install' ..parser({Apps.get_known},
-		'-g', '--global',
-		'-i', '--independent',
-		'-k', '--no-cache',
-		'-s', '--skip',
-		'-a' ..architecture_parser, '--arch' ..architecture_parser
-		):loop(1),
-	'prefix' ..parser({Apps.get_installed}),
-	'reset' ..parser({Apps.get_installed}):loop(1),
-	'search',
-	'status',
-	'uninstall' ..parser({Apps.get_installed},
-		'-g', '--global',
-		'-p', '--purge'):loop(1),
-	'update' ..parser({Apps.get_installed},
-		'-g', '--global',
-		'-f', '--force',
-		'-i', '--independent',
-		'-k', '--no-cache',
-		'-s', '--skip',
-		'-q', '--quite'):loop(1),
-	'virustotal' ..parser({Apps.get_known},
-		'-a' ..architecture_parser, '--arch' ..architecture_parser,
-		'-s', '--scan',
-		'-n', '--no-depends'):loop(1),
-	'which'
-})
+local scoop_help_parser =
+    parser(
+    {
+        "alias",
+        "bucket",
+        "cache",
+        "checkup",
+        "cleanup",
+        "config",
+        "create",
+        "depends",
+        "export",
+        "help",
+        "home",
+        "info",
+        "install",
+        "list",
+        "prefix",
+        "reset",
+        "search",
+        "status",
+        "uninstall",
+        "update",
+        "virustotal",
+        "which"
+    },
+    "/?",
+    "-h", "--help",
+    "--version"
+)
 
-local help_parser = parser({
-	'help' ..parser(scoop_parser:flatten_argument(1))
-})
-
-clink.arg.register_parser('scoop', scoop_parser)
-clink.arg.register_parser('scoop', help_parser)
+local scoop_parser = parser()
+scoop_parser:set_flags(scoop_default_flags)
+scoop_parser:set_arguments(
+    {
+        scoop_alias_list,
+        "alias" .. scoop_alias_parser,
+        "bucket" .. scoop_bucket_parser,
+        "cache" .. scoop_cache_parser,
+        "checkup",
+        "cleanup" .. scoop_cleanup_parser,
+        "config" .. scoop_config_parser,
+        "create",
+        "depends" ..
+            parser(
+                {scoop_available_apps_list, scoop_apps_list},
+                "-a" .. architecture_parser, "--arch" .. architecture_parser
+            ),
+        "export",
+        "help" .. scoop_help_parser,
+        "home" .. parser({scoop_available_apps_list, scoop_apps_list}),
+        "info" .. parser({scoop_available_apps_list, scoop_apps_list}),
+        "install" .. scoop_install_parser,
+        "list",
+        "prefix" .. parser({scoop_apps_list}),
+        "reset" .. parser({scoop_apps_list}):loop(1),
+        "search",
+        "status",
+        "uninstall" .. scoop_uninstall_parser,
+        "update" .. scoop_update_parser,
+        "virustotal" ..
+            parser(
+                {scoop_apps_list, "*"},
+                "-a" .. architecture_parser, "--arch" .. architecture_parser,
+                "-s", "--scan",
+                "-n", "--no-depends"
+            ):loop(1),
+        "which"
+    }
+)
+clink.arg.register_parser("scoop", scoop_parser)
