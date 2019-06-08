@@ -296,6 +296,7 @@ scoop_parser:set_arguments(
             ),
         "export",
         "help" .. scoop_help_parser,
+	"hold" .. parser({scoop_apps_list}),
         "home" .. parser({scoop_available_apps_list, scoop_apps_list}),
         "info" .. parser({scoop_available_apps_list, scoop_apps_list}),
         "install" .. scoop_install_parser,
@@ -304,6 +305,7 @@ scoop_parser:set_arguments(
         "reset" .. parser({scoop_apps_list}):loop(1),
         "search",
         "status",
+	"unhold" .. parser({scoop_apps_list}),
         "uninstall" .. scoop_uninstall_parser,
         "update" .. scoop_update_parser,
         "virustotal" ..
