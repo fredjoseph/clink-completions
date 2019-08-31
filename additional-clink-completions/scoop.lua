@@ -106,9 +106,7 @@ local function scoop_apps_list(token)
 end
 
 local function scoop_available_apps_list(token)
-    -- search in default bucket
-    local finder = matchers.create_files_matcher(scoop_folder() .. "\\apps\\scoop\\current\\bucket\\*.json")
-    local list = finder(token)
+    local list = w()
 
     -- search in each installed bucket
     local buckets = scoop_bucket_list("")
@@ -189,7 +187,7 @@ local scoop_cleanup_parser =
         scoop_apps_list,
         "*"
     },
-	"-g", "--global",
+    "-g", "--global",
     "-k", "--cache"
 ):loop(1)
 
